@@ -9,7 +9,6 @@ A real-time GPS tracking application built with Go and WebSockets.
 - Real-time position updates via WebSocket
 - Interactive map display using MapLibre GL with OpenStreetMap tiles
 - Configurable map styles
-- Connection status indicator
 
 ## Usage
 
