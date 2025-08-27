@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bike Tracker</title>
+    <script src="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" rel="stylesheet" />
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            z-index: 1000;
+        }
+        .connected { color: green; }
+        .disconnected { color: red; }
+    </style>
+</head>
+<body>
+    <div id="status">
+        <div>Status: <span id="connection-status" class="disconnected">Disconnected</span></div>
+        <div>Last Update: <span id="last-update">Never</span></div>
+        <div>Position: <span id="position">Unknown</span></div>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        let map;
+        let marker;
+        let ws;
+
+        async function initMap() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                
+                map = new maplibregl.Map({
+                    container: 'map',
+                    style: config.mapStyle,
+                    center: [13.4050, 52.5200],
+                    zoom: 12
+                });
+
+                map.on('load', function() {
+                    connectWebSocket();
+                });
+            } catch (error) {
+                console.error('Failed to load config:', error);
+                // Fallback to default style
+                map = new maplibregl.Map({
+                    container: 'map',
+                    style: 'https://demotiles.maplibre.org/style.json',
+                    center: [13.4050, 52.5200],
+                    zoom: 12
+                });
+
+                map.on('load', function() {
+                    connectWebSocket();
+                });
+            }
+        }
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                console.log('WebSocket connected');
+                updateStatus('connected', 'Connected');
+            };
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                updateMarker(data.latitude, data.longitude);
+                updateStatus('connected', 'Connected', data);
+            };
+
+            ws.onclose = function() {
+                console.log('WebSocket disconnected');
+                updateStatus('disconnected', 'Disconnected');
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                updateStatus('disconnected', 'Error');
+            };
+        }
+
+        function updateMarker(lat, lng) {
+            if (marker) {
+                marker.setLngLat([lng, lat]);
+            } else {
+                marker = new maplibregl.Marker({ color: '#FF0000' })
+                    .setLngLat([lng, lat])
+                    .addTo(map);
+                
+                map.setCenter([lng, lat]);
+            }
+        }
+
+        function updateStatus(statusClass, statusText, data = null) {
+            const statusElement = document.getElementById('connection-status');
+            statusElement.className = statusClass;
+            statusElement.textContent = statusText;
+
+            if (data) {
+                document.getElementById('last-update').textContent = new Date(data.timestamp * 1000).toLocaleTimeString();
+                document.getElementById('position').textContent = `${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}`;
+            }
+        }
+
+        initMap();
+    </script>
+</body>
+</html>
