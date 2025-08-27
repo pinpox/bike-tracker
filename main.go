@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -33,6 +33,11 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+var (
+	connections = make(map[*websocket.Conn]bool)
+	connMutex   sync.RWMutex
+)
+
 func main() {
 	addr := os.Getenv("ADDR")
 	if addr == "" {
@@ -52,6 +57,7 @@ func main() {
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
 	http.HandleFunc("/ws", handleWebSocket)
 	http.HandleFunc("/api/config", handleConfig)
+	http.HandleFunc("/position", handlePosition)
 
 	serverAddr := fmt.Sprintf("%s:%s", addr, port)
 	log.Printf("Server starting on http://%s", serverAddr)
@@ -64,39 +70,60 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade failed: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer func() {
+		conn.Close()
+		connMutex.Lock()
+		delete(connections, conn)
+		connMutex.Unlock()
+	}()
 
 	log.Printf("Client connected: %s", conn.RemoteAddr())
 
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	connMutex.Lock()
+	connections[conn] = true
+	connMutex.Unlock()
 
 	for {
-		select {
-		case <-ticker.C:
-			position := generateRandomPosition()
-			
-			if err := conn.WriteJSON(position); err != nil {
-				log.Printf("WebSocket write failed: %v", err)
-				return
-			}
-			
-			log.Printf("Sent position: lat=%.6f, lng=%.6f", position.Latitude, position.Longitude)
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("WebSocket read failed: %v", err)
+			break
 		}
 	}
 }
 
-func generateRandomPosition() GPSPosition {
-	baseLat := 52.5200
-	baseLng := 13.4050
-	
-	latOffset := (rand.Float64() - 0.5) * 0.1
-	lngOffset := (rand.Float64() - 0.5) * 0.1
-	
-	return GPSPosition{
-		Latitude:  baseLat + latOffset,
-		Longitude: baseLng + lngOffset,
-		Timestamp: time.Now().Unix(),
+func handlePosition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var position GPSPosition
+	if err := json.NewDecoder(r.Body).Decode(&position); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	position.Timestamp = time.Now().Unix()
+
+	broadcastPosition(position)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+	log.Printf("Received position: lat=%.6f, lng=%.6f", position.Latitude, position.Longitude)
+}
+
+func broadcastPosition(position GPSPosition) {
+	connMutex.RLock()
+	defer connMutex.RUnlock()
+
+	for conn := range connections {
+		if err := conn.WriteJSON(position); err != nil {
+			log.Printf("WebSocket write failed: %v", err)
+			conn.Close()
+			delete(connections, conn)
+		}
 	}
 }
 

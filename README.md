@@ -22,3 +22,13 @@ Environment variables:
 
 The server starts on `http://localhost:8080` by default.
 
+## Testing
+
+Send GPS data to the `/position` endpoint:
+
+```bash
+curl -X POST http://localhost:8080/position \
+  -H "Content-Type: application/json" \
+  -d '{"latitude": 52.5200, "longitude": 13.4050}'
+```
+
