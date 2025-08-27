@@ -35,6 +35,7 @@
         let map;
         let marker;
         let ws;
+        let trackCoordinates = [];
 
         async function initMap() {
             try {
@@ -49,6 +50,7 @@
                 });
 
                 map.on('load', function() {
+                    initializeTrack();
                     connectWebSocket();
                 });
             } catch (error) {
@@ -62,6 +64,7 @@
                 });
 
                 map.on('load', function() {
+                    initializeTrack();
                     connectWebSocket();
                 });
             }
@@ -96,7 +99,37 @@
             };
         }
 
+        function initializeTrack() {
+            map.addSource('track', {
+                'type': 'geojson',
+                'data': {
+                    'type': 'Feature',
+                    'properties': {},
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': []
+                    }
+                }
+            });
+
+            map.addLayer({
+                'id': 'track-line',
+                'type': 'line',
+                'source': 'track',
+                'layout': {
+                    'line-join': 'round',
+                    'line-cap': 'round'
+                },
+                'paint': {
+                    'line-color': '#FF0000',
+                    'line-width': 3
+                }
+            });
+        }
+
         function updateMarker(lat, lng) {
+            trackCoordinates.push([lng, lat]);
+
             if (marker) {
                 marker.setLngLat([lng, lat]);
             } else {
@@ -106,6 +139,15 @@
                 
                 map.setCenter([lng, lat]);
             }
+
+            map.getSource('track').setData({
+                'type': 'Feature',
+                'properties': {},
+                'geometry': {
+                    'type': 'LineString',
+                    'coordinates': trackCoordinates
+                }
+            });
         }
 
         function updateStatus(statusClass, statusText, data = null) {
