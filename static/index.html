@@ -19,6 +19,31 @@
             font-family: Arial, sans-serif;
             z-index: 1000;
         }
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            z-index: 1000;
+        }
+        .toggle-button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .toggle-button:hover {
+            background: #0056b3;
+        }
+        .toggle-button.active {
+            background: #28a745;
+        }
         .connected { color: green; }
         .disconnected { color: red; }
     </style>
@@ -29,6 +54,11 @@
         <div>Last Update: <span id="last-update">Never</span></div>
         <div>Position: <span id="position">Unknown</span></div>
     </div>
+    <div id="controls">
+        <button id="history-toggle" class="toggle-button" onclick="toggleHistory()">
+            Show History
+        </button>
+    </div>
     <div id="map"></div>
 
     <script>
@@ -36,6 +66,8 @@
         let marker;
         let ws;
         let trackCoordinates = [];
+        let historyVisible = false;
+        let historicalCoordinates = [];
 
         async function initMap() {
             try {
@@ -51,6 +83,7 @@
 
                 map.on('load', function() {
                     initializeTrack();
+                    loadLastPosition();
                     connectWebSocket();
                 });
             } catch (error) {
@@ -65,6 +98,7 @@
 
                 map.on('load', function() {
                     initializeTrack();
+                    loadLastPosition();
                     connectWebSocket();
                 });
             }
@@ -112,6 +146,18 @@
                 }
             });
 
+            map.addSource('history-track', {
+                'type': 'geojson',
+                'data': {
+                    'type': 'Feature',
+                    'properties': {},
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': []
+                    }
+                }
+            });
+
             map.addLayer({
                 'id': 'track-line',
                 'type': 'line',
@@ -123,6 +169,22 @@
                 'paint': {
                     'line-color': '#FF0000',
                     'line-width': 3
+                }
+            });
+
+            map.addLayer({
+                'id': 'history-track-line',
+                'type': 'line',
+                'source': 'history-track',
+                'layout': {
+                    'line-join': 'round',
+                    'line-cap': 'round',
+                    'visibility': 'none'
+                },
+                'paint': {
+                    'line-color': '#0066FF',
+                    'line-width': 2,
+                    'line-opacity': 0.7
                 }
             });
         }
@@ -158,6 +220,54 @@
             if (data) {
                 document.getElementById('last-update').textContent = new Date(data.timestamp * 1000).toLocaleTimeString();
                 document.getElementById('position').textContent = `${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}`;
+            }
+        }
+
+        async function loadLastPosition() {
+            try {
+                const response = await fetch('/api/last-position');
+                const lastPosition = await response.json();
+                
+                if (lastPosition && lastPosition.latitude && lastPosition.longitude) {
+                    updateMarker(lastPosition.latitude, lastPosition.longitude);
+                    updateStatus('disconnected', 'Disconnected', lastPosition);
+                }
+            } catch (error) {
+                console.error('Failed to load last position:', error);
+            }
+        }
+
+        async function toggleHistory() {
+            const button = document.getElementById('history-toggle');
+            
+            if (!historyVisible) {
+                try {
+                    const response = await fetch('/api/history');
+                    const positions = await response.json();
+                    
+                    historicalCoordinates = positions.map(pos => [pos.longitude, pos.latitude]);
+                    
+                    map.getSource('history-track').setData({
+                        'type': 'Feature',
+                        'properties': {},
+                        'geometry': {
+                            'type': 'LineString',
+                            'coordinates': historicalCoordinates
+                        }
+                    });
+                    
+                    map.setLayoutProperty('history-track-line', 'visibility', 'visible');
+                    button.textContent = 'Hide History';
+                    button.classList.add('active');
+                    historyVisible = true;
+                } catch (error) {
+                    console.error('Failed to load history:', error);
+                }
+            } else {
+                map.setLayoutProperty('history-track-line', 'visibility', 'none');
+                button.textContent = 'Show History';
+                button.classList.remove('active');
+                historyVisible = false;
             }
         }
 

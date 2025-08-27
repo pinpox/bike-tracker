@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 //go:embed static
@@ -36,9 +38,21 @@ var upgrader = websocket.Upgrader{
 var (
 	connections = make(map[*websocket.Conn]bool)
 	connMutex   sync.RWMutex
+	db          *sql.DB
 )
 
 func main() {
+	var err error
+	db, err = sql.Open("sqlite3", "bike_tracker.db")
+	if err != nil {
+		log.Fatal("Failed to open database:", err)
+	}
+	defer db.Close()
+
+	if err := initDB(); err != nil {
+		log.Fatal("Failed to initialize database:", err)
+	}
+
 	addr := os.Getenv("ADDR")
 	if addr == "" {
 		addr = "localhost"
@@ -57,6 +71,8 @@ func main() {
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
 	http.HandleFunc("/ws", handleWebSocket)
 	http.HandleFunc("/api/config", handleConfig)
+	http.HandleFunc("/api/history", handleHistory)
+	http.HandleFunc("/api/last-position", handleLastPosition)
 	http.HandleFunc("/position", handlePosition)
 
 	serverAddr := fmt.Sprintf("%s:%s", addr, port)
@@ -106,6 +122,12 @@ func handlePosition(w http.ResponseWriter, r *http.Request) {
 
 	position.Timestamp = time.Now().Unix()
 
+	if err := savePosition(position); err != nil {
+		log.Printf("Failed to save position: %v", err)
+		http.Error(w, "Failed to save position", http.StatusInternalServerError)
+		return
+	}
+
 	broadcastPosition(position)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -139,4 +161,78 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(config)
+}
+
+func initDB() error {
+	query := `
+	CREATE TABLE IF NOT EXISTS positions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		latitude REAL NOT NULL,
+		longitude REAL NOT NULL,
+		timestamp INTEGER NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	`
+	_, err := db.Exec(query)
+	return err
+}
+
+func savePosition(position GPSPosition) error {
+	query := "INSERT INTO positions (latitude, longitude, timestamp) VALUES (?, ?, ?)"
+	_, err := db.Exec(query, position.Latitude, position.Longitude, position.Timestamp)
+	return err
+}
+
+func handleHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	query := "SELECT latitude, longitude, timestamp FROM positions ORDER BY created_at"
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Printf("Failed to query history: %v", err)
+		http.Error(w, "Failed to fetch history", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var positions []GPSPosition
+	for rows.Next() {
+		var pos GPSPosition
+		if err := rows.Scan(&pos.Latitude, &pos.Longitude, &pos.Timestamp); err != nil {
+			log.Printf("Failed to scan row: %v", err)
+			continue
+		}
+		positions = append(positions, pos)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(positions)
+}
+
+func handleLastPosition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	query := "SELECT latitude, longitude, timestamp FROM positions ORDER BY created_at DESC LIMIT 1"
+	var position GPSPosition
+	
+	err := db.QueryRow(query).Scan(&position.Latitude, &position.Longitude, &position.Timestamp)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(nil)
+			return
+		}
+		log.Printf("Failed to query last position: %v", err)
+		http.Error(w, "Failed to fetch last position", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(position)
 }
